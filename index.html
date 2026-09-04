@@ -61,7 +61,10 @@
   <fieldset>
     <legend>관정 목록</legend>
     <div class="note">지역·번호·위도·경도·심도 열이 있는 CSV. (이미 자료가 있으면 올리지 않아도 됩니다)</div>
-    <input type="file" id="fileWells" accept=".csv">
+    <div class="row">
+      <input type="file" id="fileWells" accept=".csv">
+      <button id="wellsReset" style="flex:0 0 96px">기본 자료</button>
+    </div>
     <div class="note" id="wellsState"></div>
   </fieldset>
 
@@ -158,6 +161,7 @@
 
 <script>
 let WELLS = (window.WELLS || []).map((w, i) => ({...w, _i: i}));
+const BASE_WELLS = WELLS;                       // 내장 기본 자료 (CSV 를 올려도 되돌릴 수 있게 보관)
 const STD = window.STANDARDS || [];
 const PH = window.PH_RANGE || [5.8, 8.5];
 const STD_BY = Object.fromEntries(STD.map(s => [s.item, s]));
@@ -562,6 +566,26 @@ function aquiferOf(d){
   if (d == null) return '미상';
   return d <= 30 ? '천부(30m 이하)' : d >= 80 ? '심부(80m 이상)' : '중간(31~79m)';
 }
+function applyWells(list, msg){
+  WELLS = list.map((w,i)=>({...w, _i:i}));
+  const regions = [...new Set(WELLS.map(w=>w.지역))];
+  const sel = document.getElementById('region');
+  const cur = sel.value;
+  sel.innerHTML = regions.map(r=>`<option value="${r}">${r}</option>`).join('')
+                + '<option value="">전체</option>';
+  sel.value = regions.includes(cur) ? cur
+            : regions.includes('창원남산') ? '창원남산' : (regions[0] || '');
+  document.getElementById('loaded').textContent =
+    `관정 ${WELLS.length}개소 · 지역 ${regions.length}곳 · 표고 ${WELLS.filter(w=>w.지면표고!=null).length}개소`;
+  document.getElementById('wellsState').textContent = msg || '';
+  document.getElementById('calc').disabled = true;
+  flowLayer.clearLayers();
+  document.getElementById('flowRes').innerHTML = '';
+  document.getElementById('travelRes').innerHTML = '';
+  document.getElementById('wqRes').innerHTML = '';
+  fillSeries(); draw();
+  return WELLS.length;
+}
 function loadWells(text){
   const rows = parseCSV(text);
   const out = [];
@@ -582,29 +606,26 @@ function loadWells(text){
     });
   });
   if (!out.length) return 0;
-  WELLS = out.map((w,i)=>({...w, _i:i}));
-  const regions = [...new Set(WELLS.map(w=>w.지역))];
-  const sel = document.getElementById('region');
-  sel.innerHTML = regions.map(r=>`<option value="${r}">${r}</option>`).join('')
-                + '<option value="">전체</option>';
-  document.getElementById('loaded').textContent =
-    `관정 ${WELLS.length}개소 · 지역 ${regions.length}곳 · 표고 ${WELLS.filter(w=>w.지면표고!=null).length}개소`;
-  document.getElementById('calc').disabled = true;
-  flowLayer.clearLayers();
-  document.getElementById('flowRes').innerHTML = '';
-  document.getElementById('wqRes').innerHTML = '';
-  fillSeries(); draw();
-  return WELLS.length;
+  return applyWells(out, `${out.length}개소 불러옴 (기본 자료로 되돌리려면 「기본 자료」)`);
 }
 document.getElementById('fileWells').onchange = e => {
   const f = e.target.files[0]; if (!f) return;
   const rd = new FileReader();
   rd.onload = () => {
-    const n = loadWells(rd.result);
-    document.getElementById('wellsState').textContent = n
-      ? `${n}개소 불러옴` : '위도·경도 열을 찾지 못했습니다.';
+    if (!loadWells(rd.result))
+      document.getElementById('wellsState').textContent = '위도·경도 열을 찾지 못했습니다.';
   };
   rd.readAsText(f, 'utf-8');
+};
+document.getElementById('wellsReset').onclick = () => {
+  if (!BASE_WELLS.length){
+    document.getElementById('wellsState').innerHTML =
+      '<span class="warn">내장된 기본 자료가 없습니다 — CSV 를 올려주세요.</span>';
+    return;
+  }
+  document.getElementById('fileWells').value = '';
+  const regions = [...new Set(BASE_WELLS.map(w=>w.지역))].join(' · ');
+  applyWells(BASE_WELLS, `기본 자료로 되돌림 — ${regions}`);
 };
 function byNo(){
   const m = {};
