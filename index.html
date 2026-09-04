@@ -110,7 +110,8 @@
 
   <fieldset>
     <legend>① 수위 입력 → 흐름방향</legend>
-    <div class="note">현장측정양식 CSV (수위깊이_GL_m 기입) 를 올리세요.</div>
+    <div class="note">현장측정양식 CSV (<b>수위깊이_GL_m</b> 기입) 를 올리면 <b>바로 계산</b>됩니다.
+      표고는 내장 DEM 값을 쓰고, CSV 에 <code>측점표고_m</code> 가 있으면 그 값을 우선합니다.</div>
     <input type="file" id="fileLevel" accept=".csv">
     <div class="row" style="margin-top:7px">
       <select id="series"><option value="">계열 선택</option></select>
@@ -648,9 +649,11 @@ document.getElementById('fileLevel').onchange = e => {
       n++;
     });
     document.getElementById('calc').disabled = n < 3;
-    document.getElementById('flowRes').innerHTML =
-      `<div class="note">수위 ${n}개소 반영. ${n<3?'3개소 이상 필요합니다.':'계산을 누르세요.'}</div>`;
     fillSeries(); draw();
+    if (n >= 3) calcFlow();                       // 수위만 올리면 바로 표출
+    else document.getElementById('flowRes').innerHTML =
+      `<div class="note warn">수위 ${n}개소 반영 — 3개소 이상이어야 흐름방향을 계산합니다.
+       (관정 <b>번호</b>가 목록과 일치해야 하고, <b>수위깊이_GL_m</b> 값이 있어야 합니다)</div>`;
   };
   rd.readAsText(f, 'utf-8');
 };
@@ -749,6 +752,9 @@ function fillSeries(){
     maskKey(); setBase();
   };
   document.getElementById('calc').onclick = calcFlow;
+  document.getElementById('series').onchange = () => {
+    if (!document.getElementById('calc').disabled) calcFlow();
+  };
   ['kVal','kUnit','neVal'].forEach(id =>
     document.getElementById(id).onchange = () => {
       if (!document.getElementById('calc').disabled) calcFlow();
