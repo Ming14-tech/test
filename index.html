@@ -485,7 +485,11 @@ function calcFlow(){
   const warn = [];
   if (ang < 25) warn.push(`가장 좋은 삼각형의 최소내각이 ${ang.toFixed(0)}° — 관정이 일직선에 가까워 방향 오차 큼`);
   if (grad < 0.001) warn.push('동수구배가 0.001 미만 — 표고 오차로 방향이 뒤집힐 수 있음');
-  if (rows.length > 3 && pl.rms > 0.5) warn.push(`평면 잔차 RMS ${pl.rms.toFixed(2)} m — 단일 평면으로 보기 어려움`);
+  // 잔차는 절대값이 아니라 수위표고 변화폭 대비로 판단 (지형 기복이 크면 절대 잔차도 커짐)
+  const rmsRatio = (hi - lo) > 0 ? pl.rms / (hi - lo) : 0;
+  if (rows.length > 3 && rmsRatio > 0.15)
+    warn.push(`평면 잔차 RMS ${pl.rms.toFixed(2)} m — 수위표고 변화폭의 ${(rmsRatio*100).toFixed(0)}% ` +
+              `로 커서 단일 평면으로 보기 어려움 (구역을 나눠 계산하세요)`);
   if (new Set(rows.map(r=>r.대수층계열)).size > 1) warn.push('서로 다른 대수층 계열이 섞여 있습니다');
   const dates = new Set(rows.map(r=>(r._date||'').slice(0,10)).filter(Boolean));
   if (dates.size > 1) warn.push(`측정일이 ${dates.size}종 — 같은 날 측정이 원칙`);
@@ -498,7 +502,8 @@ function calcFlow(){
       <tr><th>사용 관정</th><td class="num">${rows.length}개소</td></tr>
       <tr><th>수위표고 범위</th><td class="num">${lo.toFixed(2)} ~ ${hi.toFixed(2)} m</td></tr>
       <tr><th>배치(최적 삼각형)</th><td class="num">${ang.toFixed(0)}°</td></tr>
-      ${rows.length>3?`<tr><th>평면 잔차 RMS</th><td class="num">${pl.rms.toFixed(3)} m</td></tr>`:''}
+      ${rows.length>3?`<tr><th>평면 잔차 RMS</th><td class="num">${pl.rms.toFixed(2)} m
+          (변화폭의 ${(rmsRatio*100).toFixed(0)}%)</td></tr>`:''}
     </table>
     ${warn.length?`<div class="note warn">⚠ ${warn.join('<br>⚠ ')}</div>`:''}
     <div class="note">파란 파선 = 등수위선, 검은 화살표 = 흐름방향(수위표고가 낮아지는 쪽)</div>`;
