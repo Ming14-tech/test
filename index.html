@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>지하수 관정 지도 — 흐름방향 · 수질기준 판정</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="data/key.js"></script>
+<script src="data/wells_data.js"></script>
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#fff; --line:#dfe3e8; --ink:#1b1f24; --dim:#6b7280;
+    --g1:#1F6FD0; --g2:#FFD600; --g3:#FF8A00; --g4:#E20027; --gx:#94A3B8;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;font:13px/1.55 "맑은 고딕","Malgun Gothic",system-ui,sans-serif;color:var(--ink)}
+  #wrap{display:flex;height:100%}
+  #side{width:340px;flex:none;background:var(--panel);border-right:1px solid var(--line);
+        overflow-y:auto;padding:14px 15px 40px}
+  #map{flex:1}
+  h1{font-size:15px;margin:0 0 2px}
+  .sub{color:var(--dim);font-size:11.5px;margin-bottom:12px}
+  fieldset{border:1px solid var(--line);border-radius:6px;padding:9px 11px 11px;margin:0 0 11px}
+  legend{font-size:11.5px;color:var(--dim);padding:0 4px}
+  label{display:block;margin:5px 0 2px;font-size:12px}
+  select,input[type=text],input[type=number]{width:100%;padding:5px 6px;border:1px solid var(--line);
+        border-radius:4px;font:inherit;background:#fff}
+  input[type=file]{width:100%;font-size:11.5px}
+  button{padding:6px 10px;border:1px solid var(--line);border-radius:4px;background:#fff;
+         font:inherit;cursor:pointer}
+  button.primary{background:#111827;color:#fff;border-color:#111827}
+  button:disabled{opacity:.45;cursor:default}
+  .row{display:flex;gap:6px;align-items:center}
+  .row>*{flex:1}
+  .chip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;margin:2px 8px 2px 0}
+  .dot{width:11px;height:11px;border-radius:50%;display:inline-block;border:1px solid rgba(0,0,0,.25)}
+  table.res{width:100%;border-collapse:collapse;font-size:11.5px;margin-top:6px}
+  table.res th,table.res td{border-bottom:1px solid var(--line);padding:3px 2px;text-align:left}
+  table.res th{color:var(--dim);font-weight:normal}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .note{font-size:11px;color:var(--dim);margin-top:6px}
+  .warn{color:#b45309}
+  .big{font-size:19px;font-weight:600;font-variant-numeric:tabular-nums}
+  .leaflet-popup-content{font:12px/1.6 "맑은 고딕","Malgun Gothic",sans-serif;margin:9px 12px}
+  .leaflet-popup-content b{font-size:13px}
+  .pop td{padding:1px 0}
+  .pop td:first-child{color:var(--dim);padding-right:10px;white-space:nowrap}
+  .ex{color:#E20027;font-weight:600}
+  .dlabel{background:rgba(255,255,255,.88);border:0;box-shadow:none;color:#1b1f24;
+          font-size:10.5px;font-weight:600;padding:0 3px;border-radius:3px}
+  .dlabel::before{display:none}
+</style>
+</head>
+<body>
+<div id="wrap">
+<div id="side">
+  <h1>지하수 관정 지도</h1>
+  <div class="sub">흐름방향 · [별표 9] 수질기준 초과 판정<br>
+    <span id="loaded"></span></div>
+
+  <fieldset>
+    <legend>관정 목록</legend>
+    <div class="note">지역·번호·위도·경도·심도 열이 있는 CSV. (이미 자료가 있으면 올리지 않아도 됩니다)</div>
+    <input type="file" id="fileWells" accept=".csv">
+    <div class="note" id="wellsState"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>표시</legend>
+    <label>지역</label>
+    <select id="region"></select>
+    <label>마커 색</label>
+    <select id="mode">
+      <option value="aquifer">대수층 계열</option>
+      <option value="use">관정 용도</option>
+      <option value="grade">수질 오염등급 [표 7]</option>
+      <option value="depth">관정 심도</option>
+      <option value="head">수위표고</option>
+    </select>
+    <label>배경지도</label>
+    <select id="base">
+      <option value="vworld-Base">VWorld 일반</option>
+      <option value="vworld-Satellite">VWorld 위성</option>
+      <option value="osm">OpenStreetMap</option>
+    </select>
+    <label>VWorld 인증키</label>
+    <div class="row">
+      <input type="password" id="vkey" placeholder="VWorld API Key" autocomplete="off" readonly>
+      <button id="vkeyEdit" style="flex:0 0 62px">변경</button>
+    </div>
+    <div class="note" id="vkeyState"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>마커 라벨 · 심도</legend>
+    <label><input type="checkbox" id="nameLabel"> 관정명 표시</label>
+    <label><input type="checkbox" id="depthLabel"> 심도(m) 표시</label>
+    <label><input type="checkbox" id="depthSize"> 심도에 비례해 마커 크기</label>
+    <label>심도 범위 (m)</label>
+    <div class="row">
+      <input type="number" id="depthMin" placeholder="최소" min="0">
+      <input type="number" id="depthMax" placeholder="최대" min="0">
+      <button id="depthReset" style="flex:0 0 52px">해제</button>
+    </div>
+    <div class="note" id="depthState"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>① 수위 입력 → 흐름방향</legend>
+    <div class="note">현장측정양식 CSV (수위깊이_GL_m 기입) 를 올리세요.</div>
+    <input type="file" id="fileLevel" accept=".csv">
+    <div class="row" style="margin-top:7px">
+      <select id="series"><option value="">계열 선택</option></select>
+      <button id="calc" class="primary" disabled>계산</button>
+    </div>
+    <div id="flowRes"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>③ 이동속도 · 도달거리</legend>
+    <div class="note">K 를 비워두면 대수층 계열의 <b>문헌 범위</b>로 대략 추정하고,
+      값을 넣으면 <b>단일 값</b>으로 계산합니다.</div>
+    <label>수리전도도 K</label>
+    <div class="row">
+      <input type="number" id="kVal" step="any" placeholder="비우면 추정">
+      <select id="kUnit" style="flex:0 0 92px">
+        <option value="mday">m/일</option>
+        <option value="cms">cm/초</option>
+        <option value="ms">m/초</option>
+      </select>
+    </div>
+    <label>유효공극률 nₑ <span class="note">(비우면 계열 기본값)</span></label>
+    <input type="number" id="neVal" step="any" placeholder="예: 0.20">
+    <div id="travelRes"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>② 수질분석 결과 → 기준 판정</legend>
+    <div class="note">수질입력양식 CSV 를 채워 올리면 항목별로 판정합니다.</div>
+    <input type="file" id="fileWq" accept=".csv">
+    <div id="wqRes"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>범례</legend>
+    <div id="legend"></div>
+  </fieldset>
+
+  <div class="row">
+    <button id="expCsv">결과 CSV 내려받기</button>
+  </div>
+  <div class="note">근거: 「지하수법 시행규칙」[별표 9] 생활용수 수질기준 ·
+    「지하수오염평가보고서의 작성에 관한 규정」[표 7] 오염등급기준.
+    표고는 DEM(SRTM 30m) 값으로 개략치입니다.</div>
+</div>
+<div id="map"></div>
+</div>
+
+<script>
+let WELLS = (window.WELLS || []).map((w, i) => ({...w, _i: i}));
+const STD = window.STANDARDS || [];
+const PH = window.PH_RANGE || [5.8, 8.5];
+const STD_BY = Object.fromEntries(STD.map(s => [s.item, s]));
+
+const COLORS = {
+  aquifer: {'천부(30m 이하)':'#16A34A','중간(31~79m)':'#CA8A04','심부(80m 이상)':'#0EA5E9','미상':'#94A3B8'},
+  use: {'생활용':'#0EA5E9','농업용':'#16A34A','공업용':'#A855F7','관측망':'#DB2777','':'#94A3B8'},
+  grade: {'Ⅰ':'#1F6FD0','Ⅱ':'#FFD600','Ⅲ':'#FF8A00','Ⅳ':'#E20027','-':'#94A3B8'}
+};
+// 관정 심도 구간 — 얕을수록 밝은 청록, 깊을수록 진한 남색
+const DEPTH_BANDS = [
+  {max:30,   label:'30 m 이하',    color:'#5EEAD4'},
+  {max:79,   label:'31 ~ 79 m',    color:'#2DD4BF'},
+  {max:149,  label:'80 ~ 149 m',   color:'#0EA5E9'},
+  {max:299,  label:'150 ~ 299 m',  color:'#2563EB'},
+  {max:1e9,  label:'300 m 이상',   color:'#1E3A8A'},
+];
+const depthOf = w => { const n = parseFloat(w.심도); return isNaN(n) ? null : n; };
+const depthBand = d => d==null ? null : DEPTH_BANDS.find(b => d <= b.max);
+
+// 대수층 계열별 수리전도도 K 문헌 범위(m/일)와 유효공극률 기본값
+// 출처 성격: 일반 문헌의 대표 범위 — 현장 양수시험값이 있으면 반드시 그것을 쓸 것
+const K_REF = {
+  '천부(30m 이하)':  {lo:0.5,   hi:50,  ne:0.25, desc:'충적·모래층'},
+  '중간(31~79m)':   {lo:0.05,  hi:5,   ne:0.10, desc:'풍화대'},
+  '심부(80m 이상)': {lo:0.005, hi:1,   ne:0.02, desc:'균열 암반'},
+  '미상':           {lo:0.01,  hi:10,  ne:0.10, desc:'구분 미상'},
+};
+
+const GRADE_DESC = {'Ⅰ':'기준의 50% 미만','Ⅱ':'기준의 50% 이상~기준 이하','Ⅲ':'기준 초과~200% 미만','Ⅳ':'기준의 200% 이상'};
+
+/* ── 지도 ─────────────────────────────────────────────── */
+const map = L.map('map', {preferCanvas:true}).setView([36.5, 127.8], 7);
+let baseLayer = null;
+let KEY = '';                      // 인증키는 변수로만 보관 — 화면에는 가려서 표시
+function maskKey(){
+  const el = document.getElementById('vkey');
+  el.value = KEY ? '•'.repeat(Math.max(KEY.length - 4, 8)) + KEY.slice(-4) : '';
+  document.getElementById('vkeyState').textContent =
+    KEY ? `적용됨 (끝 4자리 ${KEY.slice(-4)})` : '키 없음 — OpenStreetMap 사용';
+}
+function setBase(){
+  const v = document.getElementById('base').value;
+  const key = KEY;
+  if (baseLayer) map.removeLayer(baseLayer);
+  if (v.startsWith('vworld') && key){
+    const kind = v.split('-')[1];
+    baseLayer = L.tileLayer(
+      `https://api.vworld.kr/req/wmts/1.0.0/${key}/${kind}/{z}/{y}/{x}.${kind==='Satellite'?'jpeg':'png'}`,
+      {maxZoom:19, attribution:'VWorld'});
+  } else {
+    baseLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      {maxZoom:19, attribution:'© OpenStreetMap'});
+  }
+  baseLayer.addTo(map);
+}
+const wellLayer = L.layerGroup().addTo(map);
+const flowLayer = L.layerGroup().addTo(map);
+
+/* ── 좌표 ↔ 국지 평면 ─────────────────────────────────── */
+const R = 6371000;
+function makeProj(rows){
+  const lat0 = rows.reduce((s,r)=>s+r.lat,0)/rows.length;
+  const lon0 = rows.reduce((s,r)=>s+r.lon,0)/rows.length;
+  const k = Math.cos(lat0*Math.PI/180);
+  return {
+    xy: (lat,lon)=>[ (lon-lon0)*Math.PI/180*R*k, (lat-lat0)*Math.PI/180*R ],
+    ll: (x,y)=>[ lat0 + y/R*180/Math.PI, lon0 + x/(R*k)*180/Math.PI ]
+  };
+}
+
+/* ── CSV ──────────────────────────────────────────────── */
+function parseCSV(text){
+  const rows = []; let row = [], cur = '', q = false;
+  text = text.replace(/^﻿/, '');
+  for (let i=0;i<text.length;i++){
+    const c = text[i];
+    if (q){
+      if (c === '"'){ if (text[i+1] === '"'){cur+='"';i++;} else q=false; }
+      else cur += c;
+    } else if (c === '"') q = true;
+    else if (c === ','){ row.push(cur); cur=''; }
+    else if (c === '\n'){ row.push(cur); rows.push(row); row=[]; cur=''; }
+    else if (c !== '\r') cur += c;
+  }
+  if (cur !== '' || row.length){ row.push(cur); rows.push(row); }
+  if (!rows.length) return [];
+  const head = rows[0].map(h=>h.trim());
+  return rows.slice(1).filter(r=>r.some(v=>String(v).trim()))
+             .map(r=>Object.fromEntries(head.map((h,i)=>[h, (r[i]??'').trim()])));
+}
+const num = v => { const n = parseFloat(String(v).replace(/[^0-9.\-]/g,'')); return isNaN(n)?null:n; };
+
+/* ── 수질 판정 ────────────────────────────────────────── */
+function judge(rec){
+  const items = [], exceeded = [];
+  let worst = 0, worstItem = null;
+  for (const s of STD){
+    const v = num(rec[s.item]);
+    if (v === null) continue;
+    const ratio = v / s.limit;
+    items.push({item:s.item, value:v, limit:s.limit, unit:s.unit, ratio});
+    if (v - s.limit > Math.abs(s.limit)*1e-9) exceeded.push(s.item);
+    if (ratio > worst){ worst = ratio; worstItem = s.item; }
+  }
+  const ph = num(rec['수소이온농도']);
+  const phOut = (ph !== null) && (ph < PH[0] || ph > PH[1]);
+  let grade = '-';
+  if (items.length) grade = worst >= 2 ? 'Ⅳ' : worst >= 1 ? 'Ⅲ' : worst >= 0.5 ? 'Ⅱ' : 'Ⅰ';
+  return {items, exceeded, grade, worst, worstItem, ph, phOut, date: rec['채수일자']||''};
+}
+
+/* ── 마커 ─────────────────────────────────────────────── */
+function colorOf(w){
+  const mode = document.getElementById('mode').value;
+  if (mode === 'grade') return COLORS.grade[w._wq ? w._wq.grade : '-'];
+  if (mode === 'use')   return COLORS.use[w.용도] || COLORS.use[''];
+  if (mode === 'depth'){
+    const b = depthBand(depthOf(w));
+    return b ? b.color : '#94A3B8';
+  }
+  if (mode === 'head'){
+    const hs = view().filter(x=>x._head!=null).map(x=>x._head);
+    if (w._head==null || !hs.length) return '#94A3B8';
+    const lo=Math.min(...hs), hi=Math.max(...hs), t=hi>lo?(w._head-lo)/(hi-lo):.5;
+    return `hsl(${210 - 210*t}, 78%, 46%)`;   // 낮음 파랑 → 높음 빨강
+  }
+  return COLORS.aquifer[w.대수층계열] || '#94A3B8';
+}
+function popup(w){
+  const t = [];
+  t.push(`<b>${w.번호}</b> <span style="color:#6b7280">${w.지역}</span>`);
+  t.push('<table class="pop">');
+  t.push(`<tr><td>주소</td><td>${w.주소||'-'}</td></tr>`);
+  t.push(`<tr><td>용도 · 심도</td><td>${w.용도||'-'} · ${w.심도||'-'} m</td></tr>`);
+  t.push(`<tr><td>대수층 계열</td><td>${w.대수층계열}</td></tr>`);
+  t.push(`<tr><td>지면표고(DEM)</td><td>${w.지면표고!=null?w.지면표고.toFixed(1)+' m':'-'}</td></tr>`);
+  if (w._head != null){
+    t.push(`<tr><td>수위깊이</td><td>${w._dtw.toFixed(2)} m (${w._datum||'GL'})</td></tr>`);
+    t.push(`<tr><td><b>수위표고</b></td><td><b>${w._head.toFixed(2)} m</b></td></tr>`);
+  }
+  if (w._wq){
+    const q = w._wq;
+    t.push(`<tr><td>수질 등급</td><td><b>${q.grade}</b> ${GRADE_DESC[q.grade]||''} ${q.date?'('+q.date+')':''}</td></tr>`);
+    t.push(`<tr><td>기준 초과</td><td>${q.exceeded.length
+      ? '<span class="ex">'+q.exceeded.join(', ')+'</span>' : '없음'}</td></tr>`);
+    if (q.ph!=null) t.push(`<tr><td>수소이온농도</td><td>${q.ph}${q.phOut?' <span class="ex">범위 밖</span>':''}</td></tr>`);
+    const top = q.items.slice().sort((a,b)=>b.ratio-a.ratio).slice(0,5)
+      .map(i=>`${i.item} ${i.value}${i.unit==='mg/L'?'':' '+i.unit} <span style="color:#6b7280">(기준 대비 ${(i.ratio*100).toFixed(0)}%)</span>`);
+    if (top.length) t.push(`<tr><td>주요 항목</td><td>${top.join('<br>')}</td></tr>`);
+  }
+  t.push('</table>');
+  return t.join('');
+}
+function view(){
+  const r = document.getElementById('region').value;
+  let rows = r ? WELLS.filter(w=>w.지역===r) : WELLS;
+  const lo = parseFloat(document.getElementById('depthMin').value);
+  const hi = parseFloat(document.getElementById('depthMax').value);
+  if (!isNaN(lo) || !isNaN(hi)){
+    rows = rows.filter(w=>{
+      const d = depthOf(w);
+      if (d == null) return false;                       // 심도 미기재는 범위 지정 시 제외
+      return (isNaN(lo) || d >= lo) && (isNaN(hi) || d <= hi);
+    });
+  }
+  return rows;
+}
+function draw(){
+  wellLayer.clearLayers();
+  const rows = view();
+  const showName  = document.getElementById('nameLabel').checked;
+  const showDepth = document.getElementById('depthLabel').checked;
+  const bySize = document.getElementById('depthSize').checked;
+  const maxD = Math.max(...rows.map(w=>depthOf(w) || 0), 1);
+  rows.forEach(w=>{
+    const d = depthOf(w);
+    let radius = w._wq && w._wq.exceeded.length ? 9 : 7;
+    if (bySize) radius = d == null ? 4 : 4 + 9*Math.sqrt(d/maxD);
+    const m = L.circleMarker([w.lat,w.lon], {
+      radius, color:'#fff', weight:1.5, fillColor: colorOf(w), fillOpacity:.95
+    }).bindPopup(popup(w)).addTo(wellLayer);
+    const parts = [];
+    if (showName)  parts.push(w.번호);
+    if (showDepth) parts.push(d == null ? '심도 미기재' : `${d.toFixed(0)} m`);
+    if (parts.length)
+      m.bindTooltip(parts.join(' · '),
+                    {permanent:true, direction:'bottom', className:'dlabel', offset:[0,4]});
+    else
+      m.bindTooltip(w.번호, {direction:'top'});   // 라벨 해제 시에는 올려놓으면 표시
+  });
+  const withD = rows.filter(w=>depthOf(w)!=null).map(depthOf);
+  document.getElementById('depthState').textContent = withD.length
+    ? `표시 ${rows.length}개소 · 심도 기재 ${withD.length}개소 (${Math.min(...withD)} ~ ${Math.max(...withD)} m)`
+    : `표시 ${rows.length}개소 · 심도 기재 없음`;
+  if (rows.length) map.fitBounds(L.latLngBounds(rows.map(w=>[w.lat,w.lon])).pad(0.15));
+  legend();
+}
+function legend(){
+  const mode = document.getElementById('mode').value;
+  const box = document.getElementById('legend');
+  if (mode === 'depth'){
+    box.innerHTML = DEPTH_BANDS.map(b=>
+      `<span class="chip"><i class="dot" style="background:${b.color}"></i>${b.label}</span>`).join('')
+      + '<span class="chip"><i class="dot" style="background:#94A3B8"></i>미기재</span>';
+    return;
+  }
+  if (mode === 'head'){
+    box.innerHTML = '<div class="note">수위표고 낮음(파랑) → 높음(빨강). 물은 빨강에서 파랑 쪽으로 흐릅니다.</div>';
+    return;
+  }
+  const map_ = mode==='grade' ? COLORS.grade : mode==='use' ? COLORS.use : COLORS.aquifer;
+  box.innerHTML = Object.entries(map_).map(([k,v])=>
+    `<span class="chip"><i class="dot" style="background:${v}"></i>${k||'미기재'}${
+      mode==='grade' && GRADE_DESC[k] ? ' <span style="color:#6b7280">'+GRADE_DESC[k]+'</span>' : ''}</span>`
+  ).join('');
+}
+
+/* ── 흐름방향 ─────────────────────────────────────────── */
+function fitPlane(rows, proj){
+  const A = rows.map(r=>{const [x,y]=proj.xy(r.lat,r.lon); return [x,y,1];});
+  const h = rows.map(r=>r._head);
+  // 정규방정식 (3x3) 직접 풀이
+  const N=[[0,0,0],[0,0,0],[0,0,0]], b=[0,0,0];
+  A.forEach((a,i)=>{ for(let p=0;p<3;p++){ b[p]+=a[p]*h[i]; for(let q=0;q<3;q++) N[p][q]+=a[p]*a[q]; }});
+  // 가우스 소거
+  const M = N.map((r,i)=>r.concat([b[i]]));
+  for (let c=0;c<3;c++){
+    let piv=c; for(let r=c+1;r<3;r++) if(Math.abs(M[r][c])>Math.abs(M[piv][c])) piv=r;
+    [M[c],M[piv]]=[M[piv],M[c]];
+    if (Math.abs(M[c][c])<1e-12) return null;
+    for(let r=0;r<3;r++){ if(r===c) continue; const f=M[r][c]/M[c][c];
+      for(let k=c;k<4;k++) M[r][k]-=f*M[c][k]; }
+  }
+  const coef=[M[0][3]/M[0][0], M[1][3]/M[1][1], M[2][3]/M[2][2]];
+  const resid = A.map((a,i)=>h[i]-(a[0]*coef[0]+a[1]*coef[1]+coef[2]));
+  const rms = Math.sqrt(resid.reduce((s,v)=>s+v*v,0)/resid.length);
+  return {a:coef[0], b:coef[1], c:coef[2], rms, resid};
+}
+function bestTriangleAngle(pts){   // 가장 잘 잡힌 삼각형의 최소내각 (배치 품질)
+  let best = 0;
+  for (let i=0;i<pts.length;i++) for (let j=i+1;j<pts.length;j++) for (let k=j+1;k<pts.length;k++){
+    const P=[pts[i],pts[j],pts[k]]; let tri=180;
+    for (const [a,b,c] of [[0,1,2],[1,0,2],[2,0,1]]){
+      const v1=[P[b][0]-P[a][0],P[b][1]-P[a][1]], v2=[P[c][0]-P[a][0],P[c][1]-P[a][1]];
+      const n1=Math.hypot(...v1), n2=Math.hypot(...v2);
+      if(!n1||!n2) continue;
+      const ang=Math.acos(Math.max(-1,Math.min(1,(v1[0]*v2[0]+v1[1]*v2[1])/(n1*n2))))*180/Math.PI;
+      tri=Math.min(tri,ang);
+    }
+    best=Math.max(best,tri);
+  }
+  return best;
+}
+const COMPASS=['북','북북동','북동','동북동','동','동남동','남동','남남동','남','남남서','남서','서남서','서','서북서','북서','북북서'];
+
+function calcFlow(){
+  flowLayer.clearLayers();
+  const series = document.getElementById('series').value;
+  const rows = view().filter(w => w._head != null && (!series || w.대수층계열 === series));
+  const box = document.getElementById('flowRes');
+  if (rows.length < 3){
+    box.innerHTML = `<div class="note warn">수위표고가 있는 관정이 ${rows.length}개소입니다. 3개소 이상 필요합니다.</div>`;
+    return;
+  }
+  const proj = makeProj(rows);
+  const pl = fitPlane(rows, proj);
+  if (!pl){ box.innerHTML = '<div class="note warn">관정이 일직선상이라 평면을 정할 수 없습니다.</div>'; return; }
+
+  const grad = Math.hypot(pl.a, pl.b);
+  const dir = (Math.atan2(-pl.a, -pl.b)*180/Math.PI + 360) % 360;   // 내리막 방위각
+  const pts = rows.map(r=>proj.xy(r.lat,r.lon));
+  const ang = bestTriangleAngle(pts);
+
+  // 화살표
+  const cx = pts.reduce((s,p)=>s+p[0],0)/pts.length, cy = pts.reduce((s,p)=>s+p[1],0)/pts.length;
+  const span = Math.max(...pts.map(p=>Math.hypot(p[0]-cx,p[1]-cy))) || 500;
+  const L0 = span*0.9, ux = -pl.a/grad, uy = -pl.b/grad;
+  const tail = proj.ll(cx-ux*L0/2, cy-uy*L0/2), head = proj.ll(cx+ux*L0/2, cy+uy*L0/2);
+  L.polyline([tail,head], {color:'#111827', weight:4, opacity:.9}).addTo(flowLayer);
+  const hx=cx+ux*L0/2, hy=cy+uy*L0/2, w=L0*0.09;
+  const p1=proj.ll(hx-ux*w*2 - uy*w, hy-uy*w*2 + ux*w);
+  const p2=proj.ll(hx-ux*w*2 + uy*w, hy-uy*w*2 - ux*w);
+  L.polygon([proj.ll(hx,hy),p1,p2],{color:'#111827',weight:1,fillColor:'#111827',fillOpacity:.9}).addTo(flowLayer);
+
+  // 등수위선 (평면의 등고선 = 평행 직선)
+  const hs = rows.map(r=>r._head);
+  const lo = Math.min(...hs), hi = Math.max(...hs), step = (hi-lo)/5 || 1;
+  for (let hv = Math.ceil(lo/step)*step; hv <= hi; hv += step){
+    // a x + b y + c = hv  위의 두 점
+    const t = span*1.6, seg = [];
+    for (const s of [-t, t]){
+      const px = cx + (-uy)*s, py = cy + (ux)*s;             // 등고선 방향 = 구배에 직교
+      const corr = (hv - (pl.a*px + pl.b*py + pl.c)) / (grad*grad);
+      seg.push(proj.ll(px + pl.a*corr, py + pl.b*corr));
+    }
+    L.polyline(seg, {color:'#2563EB', weight:1.2, opacity:.75, dashArray:'6 5'})
+      .bindTooltip(`${hv.toFixed(1)} m`, {permanent:false}).addTo(flowLayer);
+  }
+
+  // 이동거리 눈금 (흐름 방향으로 1년 이동 위치)
+  const yr = travel(grad, rows);
+  if (yr){
+    const mark = (dist, color, label) => {
+      const px = cx + ux*dist, py = cy + uy*dist;
+      const p = proj.ll(px, py);
+      L.circleMarker(p, {radius:5, color:'#fff', weight:1.5,
+                         fillColor:color, fillOpacity:.95})
+        .bindTooltip(label, {permanent:false}).addTo(flowLayer);
+    };
+    if (yr[0] === yr[1]) mark(yr[0], '#111827', `1년 이동 ${fmtLen(yr[0])}`);
+    else {
+      mark(yr[0], '#64748B', `1년 이동 최소 ${fmtLen(yr[0])}`);
+      mark(yr[1], '#111827', `1년 이동 최대 ${fmtLen(yr[1])}`);
+      L.polyline([proj.ll(cx+ux*yr[0], cy+uy*yr[0]), proj.ll(cx+ux*yr[1], cy+uy*yr[1])],
+                 {color:'#111827', weight:2, opacity:.5, dashArray:'3 4'}).addTo(flowLayer);
+    }
+  }
+
+  const warn = [];
+  if (ang < 25) warn.push(`가장 좋은 삼각형의 최소내각이 ${ang.toFixed(0)}° — 관정이 일직선에 가까워 방향 오차 큼`);
+  if (grad < 0.001) warn.push('동수구배가 0.001 미만 — 표고 오차로 방향이 뒤집힐 수 있음');
+  if (rows.length > 3 && pl.rms > 0.5) warn.push(`평면 잔차 RMS ${pl.rms.toFixed(2)} m — 단일 평면으로 보기 어려움`);
+  if (new Set(rows.map(r=>r.대수층계열)).size > 1) warn.push('서로 다른 대수층 계열이 섞여 있습니다');
+  const dates = new Set(rows.map(r=>(r._date||'').slice(0,10)).filter(Boolean));
+  if (dates.size > 1) warn.push(`측정일이 ${dates.size}종 — 같은 날 측정이 원칙`);
+
+  box.innerHTML = `
+    <div class="big">${dir.toFixed(1)}° <span style="font-size:13px;font-weight:400">
+      ${COMPASS[Math.floor(((dir+11.25)%360)/22.5)]} 방향</span></div>
+    <table class="res">
+      <tr><th>동수구배</th><td class="num">${grad.toFixed(5)} (${(grad*1000).toFixed(2)} m/km)</td></tr>
+      <tr><th>사용 관정</th><td class="num">${rows.length}개소</td></tr>
+      <tr><th>수위표고 범위</th><td class="num">${lo.toFixed(2)} ~ ${hi.toFixed(2)} m</td></tr>
+      <tr><th>배치(최적 삼각형)</th><td class="num">${ang.toFixed(0)}°</td></tr>
+      ${rows.length>3?`<tr><th>평면 잔차 RMS</th><td class="num">${pl.rms.toFixed(3)} m</td></tr>`:''}
+    </table>
+    ${warn.length?`<div class="note warn">⚠ ${warn.join('<br>⚠ ')}</div>`:''}
+    <div class="note">파란 파선 = 등수위선, 검은 화살표 = 흐름방향(수위표고가 낮아지는 쪽)</div>`;
+}
+
+/* ── 이동속도 (다르시) ────────────────────────────────── */
+function kToMday(v, unit){
+  if (v == null) return null;
+  return unit === 'ms' ? v*86400 : unit === 'cms' ? v*864 : v;   // cm/s → m/일 = ×864
+}
+function fmtLen(m){
+  return m >= 1000 ? `${(m/1000).toFixed(m/1000<10?2:1)} km` : `${m.toFixed(m<10?2:0)} m`;
+}
+function travel(grad, rows){
+  const box = document.getElementById('travelRes');
+  if (!grad){ box.innerHTML = ''; return null; }
+
+  // 계열 기준값 — 선택 계열이 있으면 그것, 없으면 표시된 관정의 최빈 계열
+  const cnt = {};
+  rows.forEach(r => cnt[r.대수층계열] = (cnt[r.대수층계열]||0) + 1);
+  const series = document.getElementById('series').value
+    || Object.entries(cnt).sort((a,b)=>b[1]-a[1])[0]?.[0] || '미상';
+  const ref = K_REF[series] || K_REF['미상'];
+
+  const kIn = parseFloat(document.getElementById('kVal').value);
+  const kUnit = document.getElementById('kUnit').value;
+  const neIn = parseFloat(document.getElementById('neVal').value);
+  const ne = (!isNaN(neIn) && neIn > 0) ? neIn : ref.ne;
+  const k = isNaN(kIn) ? null : kToMday(kIn, kUnit);
+
+  // 실제 이동속도 v = K·i / n_e  (m/일)
+  const vOf = kk => kk * grad / ne;
+  let head, rowsHtml, yr1;
+  if (k != null){
+    const v = vOf(k);
+    yr1 = [v*365, v*365];
+    head = `<div class="big">${fmtLen(v*365)}<span style="font-size:13px;font-weight:400"> / 년</span></div>`;
+    rowsHtml = `
+      <tr><th>입력 K</th><td class="num">${k.toFixed(k<1?4:2)} m/일</td></tr>
+      <tr><th>유효공극률 nₑ</th><td class="num">${ne}${isNaN(neIn)?' (기본값)':''}</td></tr>
+      <tr><th>다르시 유속 q=K·i</th><td class="num">${(k*grad).toExponential(2)} m/일</td></tr>
+      <tr><th>실제 유속 v=q/nₑ</th><td class="num">${v.toFixed(v<1?4:2)} m/일</td></tr>
+      <tr><th>1년 / 5년 / 10년</th><td class="num">${fmtLen(v*365)} / ${fmtLen(v*1825)} / ${fmtLen(v*3650)}</td></tr>`;
+  } else {
+    const vlo = vOf(ref.lo), vhi = vOf(ref.hi);
+    yr1 = [vlo*365, vhi*365];
+    head = `<div class="big" style="font-size:15px">${fmtLen(vlo*365)} ~ ${fmtLen(vhi*365)}
+            <span style="font-size:13px;font-weight:400">/ 년 (추정)</span></div>`;
+    rowsHtml = `
+      <tr><th>가정 계열</th><td class="num">${series} · ${ref.desc}</td></tr>
+      <tr><th>문헌 K 범위</th><td class="num">${ref.lo} ~ ${ref.hi} m/일</td></tr>
+      <tr><th>유효공극률 nₑ</th><td class="num">${ne}${isNaN(neIn)?' (기본값)':''}</td></tr>
+      <tr><th>실제 유속 v</th><td class="num">${vlo.toFixed(4)} ~ ${vhi.toFixed(2)} m/일</td></tr>
+      <tr><th>10년 이동</th><td class="num">${fmtLen(vlo*3650)} ~ ${fmtLen(vhi*3650)}</td></tr>`;
+  }
+  box.innerHTML = head + `<table class="res">${rowsHtml}</table>` +
+    (k == null
+      ? '<div class="note warn">⚠ K 미입력 — 문헌 범위 기반 <b>개략 추정</b>입니다. 범위가 100배 이상 벌어질 수 있어 ' +
+        '판단 근거로 쓰려면 <b>현장 양수시험 K</b> 를 넣으세요.</div>'
+      : '<div class="note">v = K·i / nₑ (다르시). 균질·등방·정상류 가정입니다.</div>');
+  return yr1;
+}
+
+/* ── 파일 불러오기 ────────────────────────────────────── */
+function aquiferOf(d){
+  if (d == null) return '미상';
+  return d <= 30 ? '천부(30m 이하)' : d >= 80 ? '심부(80m 이상)' : '중간(31~79m)';
+}
+function loadWells(text){
+  const rows = parseCSV(text);
+  const out = [];
+  rows.forEach(r => {
+    const lat = num(r['위도']), lon = num(r['경도']);
+    if (lat === null || lon === null) return;
+    const d = num(r['심도'] ?? r['심도(m)']);
+    out.push({
+      지역: (r['지역']||'').trim() || '미지정',
+      번호: (r['번호']||r['관정명']||'').trim(),
+      주소: (r['주소']||'').trim(),
+      용도: (r['용도']||r['관정/용도']||'').trim(),
+      심도: d == null ? '' : String(d),
+      대수층계열: (r['대수층계열']||'').trim() || aquiferOf(d),
+      lat, lon,
+      중심거리_m: r['중심거리_m']||'',
+      지면표고: num(r['지면표고'] ?? r['지면표고_DEM_m'] ?? r['표고']),
+    });
+  });
+  if (!out.length) return 0;
+  WELLS = out.map((w,i)=>({...w, _i:i}));
+  const regions = [...new Set(WELLS.map(w=>w.지역))];
+  const sel = document.getElementById('region');
+  sel.innerHTML = regions.map(r=>`<option value="${r}">${r}</option>`).join('')
+                + '<option value="">전체</option>';
+  document.getElementById('loaded').textContent =
+    `관정 ${WELLS.length}개소 · 지역 ${regions.length}곳 · 표고 ${WELLS.filter(w=>w.지면표고!=null).length}개소`;
+  document.getElementById('calc').disabled = true;
+  flowLayer.clearLayers();
+  document.getElementById('flowRes').innerHTML = '';
+  document.getElementById('wqRes').innerHTML = '';
+  fillSeries(); draw();
+  return WELLS.length;
+}
+document.getElementById('fileWells').onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    const n = loadWells(rd.result);
+    document.getElementById('wellsState').textContent = n
+      ? `${n}개소 불러옴` : '위도·경도 열을 찾지 못했습니다.';
+  };
+  rd.readAsText(f, 'utf-8');
+};
+function byNo(){
+  const m = {};
+  view().forEach(w => { m[String(w.번호).trim()] = w; });
+  return m;
+}
+document.getElementById('fileLevel').onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    const rows = parseCSV(rd.result), idx = byNo();
+    let n = 0;
+    rows.forEach(r => {
+      const w = idx[String(r['번호']||'').trim()]; if (!w) return;
+      const dtw = num(r['수위깊이_GL_m']); if (dtw === null) return;
+      const datum = (r['측점기준(GL/TOC)']||'GL').trim();
+      const gl = num(r['측점표고_m']) ?? num(r['지면표고_DEM_m']) ?? w.지면표고;
+      if (gl === null || gl === undefined) return;
+      w._dtw = dtw; w._datum = datum; w._head = gl - dtw; w._date = r['측정일시']||'';
+      n++;
+    });
+    document.getElementById('calc').disabled = n < 3;
+    document.getElementById('flowRes').innerHTML =
+      `<div class="note">수위 ${n}개소 반영. ${n<3?'3개소 이상 필요합니다.':'계산을 누르세요.'}</div>`;
+    fillSeries(); draw();
+  };
+  rd.readAsText(f, 'utf-8');
+};
+document.getElementById('fileWq').onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    const rows = parseCSV(rd.result), idx = byNo();
+    let n = 0, ex = 0;
+    rows.forEach(r => {
+      const w = idx[String(r['번호']||'').trim()]; if (!w) return;
+      const q = judge(r);
+      if (!q.items.length && q.ph == null) return;
+      w._wq = q; n++; if (q.exceeded.length) ex++;
+    });
+    document.getElementById('mode').value = 'grade';
+    const list = view().filter(w=>w._wq && w._wq.exceeded.length)
+      .sort((a,b)=>b._wq.worst-a._wq.worst)
+      .map(w=>`<tr><td>${w.번호}</td><td>${w._wq.grade}</td>
+               <td>${w._wq.exceeded.join(', ')}</td>
+               <td class="num">${(w._wq.worst*100).toFixed(0)}%</td></tr>`).join('');
+    document.getElementById('wqRes').innerHTML =
+      `<table class="res"><tr><th>판정</th><td class="num">${n}개소</td></tr>
+        <tr><th>기준 초과</th><td class="num">${ex}개소</td></tr></table>` +
+      (list ? `<table class="res"><tr><th>관정</th><th>등급</th><th>초과항목</th><th>기준대비</th></tr>${list}</table>`
+            : '<div class="note">기준 초과 관정 없음</div>');
+    draw();
+  };
+  rd.readAsText(f, 'utf-8');
+};
+
+/* ── 내보내기 ─────────────────────────────────────────── */
+document.getElementById('expCsv').onclick = () => {
+  const head = ['지역','번호','주소','용도','심도','대수층계열','위도','경도',
+                '지면표고_DEM_m','수위깊이_GL_m','수위표고_m','수질등급','초과항목','기준대비_최대(%)'];
+  const lines = [head.join(',')];
+  view().forEach(w => {
+    const q = w._wq;
+    lines.push([w.지역,w.번호,`"${w.주소||''}"`,w.용도,w.심도,w.대수층계열,
+      w.lat.toFixed(6),w.lon.toFixed(6),
+      w.지면표고!=null?w.지면표고.toFixed(1):'',
+      w._dtw!=null?w._dtw.toFixed(2):'',
+      w._head!=null?w._head.toFixed(2):'',
+      q?q.grade:'', q?`"${q.exceeded.join(';')}"`:'',
+      q?(q.worst*100).toFixed(0):''].join(','));
+  });
+  const blob = new Blob(['﻿'+lines.join('\n')], {type:'text/csv;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `관정판정_${document.getElementById('region').value||'전체'}.csv`;
+  a.click();
+};
+
+/* ── 초기화 ───────────────────────────────────────────── */
+function fillSeries(){
+  const sel = document.getElementById('series');
+  const cur = sel.value;
+  const list = [...new Set(view().filter(w=>w._head!=null).map(w=>w.대수층계열))];
+  sel.innerHTML = '<option value="">전체 계열</option>' +
+    list.map(s=>`<option value="${s}">${s}</option>`).join('');
+  if (list.includes(cur)) sel.value = cur;
+}
+(function init(){
+  const regions = [...new Set(WELLS.map(w=>w.지역))];
+  const sel = document.getElementById('region');
+  sel.innerHTML = regions.map(r=>`<option value="${r}">${r}</option>`).join('')
+                + '<option value="">전체</option>';
+  if (regions.includes('창원남산')) sel.value = '창원남산';   // 현재 진행 지역
+  document.getElementById('loaded').textContent =
+    `관정 ${WELLS.length}개소 · 지역 ${regions.length}곳 · 표고 ${WELLS.filter(w=>w.지면표고!=null).length}개소`;
+  let stored = '';
+  try { stored = localStorage.getItem('vworld_key') || ''; } catch(e) {}   // 저장소 차단 환경 대비
+  KEY = stored || window.VWORLD_KEY || '';
+  maskKey();
+  document.getElementById('base').value = KEY ? 'vworld-Base' : 'osm';
+  ['region','mode','nameLabel','depthLabel','depthSize','depthMin','depthMax']
+    .forEach(id => document.getElementById(id).onchange = ()=>{fillSeries();draw();});
+  document.getElementById('depthReset').onclick = ()=>{
+    document.getElementById('depthMin').value = '';
+    document.getElementById('depthMax').value = '';
+    draw();
+  };
+  document.getElementById('base').onchange = setBase;
+  const vk = document.getElementById('vkey');
+  document.getElementById('vkeyEdit').onclick = () => {
+    if (vk.readOnly){                       // 변경 모드로 전환 (입력 중에도 값은 가려짐)
+      vk.readOnly = false; vk.value = ''; vk.placeholder = '새 인증키 입력 후 Enter';
+      document.getElementById('vkeyEdit').textContent = '취소';
+      vk.focus();
+    } else { vk.readOnly = true; maskKey(); document.getElementById('vkeyEdit').textContent = '변경'; }
+  };
+  vk.onchange = () => {
+    const v = vk.value.trim();
+    if (v){ KEY = v; try { localStorage.setItem('vworld_key', v); } catch(err) {} }
+    vk.readOnly = true; document.getElementById('vkeyEdit').textContent = '변경';
+    maskKey(); setBase();
+  };
+  document.getElementById('calc').onclick = calcFlow;
+  ['kVal','kUnit','neVal'].forEach(id =>
+    document.getElementById(id).onchange = () => {
+      if (!document.getElementById('calc').disabled) calcFlow();
+    });
+  if (!WELLS.length)
+    document.getElementById('wellsState').innerHTML =
+      '<span class="warn">관정 자료가 없습니다 — 관정목록 CSV 를 올려 시작하세요.</span>';
+  setBase(); fillSeries(); draw();
+})();
+</script>
+</body>
+</html>
